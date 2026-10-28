@@ -64,11 +64,29 @@ CorsairPeripheralV2Controller::CorsairPeripheralV2Controller(hid_device* dev_han
     |   the device being set up.                                |
     \*---------------------------------------------------------*/
     uint8_t buffer[CORSAIR_V2_PACKET_SIZE];
+    memset(buffer, 0, CORSAIR_V2_PACKET_SIZE);
     buffer[1] = write_cmd;
     buffer[2] = CORSAIR_V2_CMD_GET;
     buffer[3] = 0x11;
-    hid_write(dev, buffer, CORSAIR_V2_WRITE_SIZE);
+    int written = hid_write(dev, buffer, CORSAIR_V2_WRITE_SIZE);
     hid_read_timeout(dev, buffer, CORSAIR_V2_PACKET_SIZE, CORSAIR_V2_TIMEOUT);
+
+    /*---------------------------------------------------------*\
+    | Detect the real output report length                      |
+    |   Newer firmware (e.g. K100 1B1C:1BC5) uses 1024 byte     |
+    |   output reports. On Windows hidapi pads every write to   |
+    |   the report length and returns the padded size. The      |
+    |   device then treats the zero padding of the first block  |
+    |   write packet as LED data, so only the LEDs carried in   |
+    |   the first 64 bytes light up and the continuation        |
+    |   packets are discarded. Size block writes to the real    |
+    |   report length instead.                                  |
+    \*---------------------------------------------------------*/
+    if(written > CORSAIR_V2_WRITE_SIZE && written <= CORSAIR_V2_MAX_WRITE_SIZE)
+    {
+        write_size = (uint16_t)written;
+    }
+    LOG_DEBUG("[%s] Output report length %d, block write size set to %d", device_name.c_str(), written, write_size);
 
     /*---------------------------------------------------------*\
     | NB: If the device is not found in the device list         |
@@ -381,9 +399,9 @@ void CorsairPeripheralV2Controller::SetLEDs(uint8_t *data, uint16_t data_size)
     const uint8_t offset2   = 4;
     uint16_t remaining      = data_size;
 
-    uint8_t buffer[CORSAIR_V2_PACKET_SIZE];
+    uint8_t buffer[CORSAIR_V2_MAX_WRITE_SIZE];
     uint8_t response[CORSAIR_V2_PACKET_SIZE];
-    memset(buffer, 0, CORSAIR_V2_PACKET_SIZE);
+    memset(buffer, 0, CORSAIR_V2_MAX_WRITE_SIZE);
     memset(response, 0, CORSAIR_V2_PACKET_SIZE);
 
     ClearPacketBuffer();
@@ -400,7 +418,7 @@ void CorsairPeripheralV2Controller::SetLEDs(uint8_t *data, uint16_t data_size)
     /*---------------------------------------------------------*\
     | Check if the data needs more than 1 packet                |
     \*---------------------------------------------------------*/
-    uint16_t copy_bytes     = CORSAIR_V2_WRITE_SIZE - offset1;
+    uint16_t copy_bytes     = write_size - offset1;
     if(remaining < copy_bytes)
     {
         copy_bytes          = remaining;
@@ -408,7 +426,7 @@ void CorsairPeripheralV2Controller::SetLEDs(uint8_t *data, uint16_t data_size)
 
     memcpy(&buffer[offset1], &data[0], copy_bytes);
 
-    hid_write(dev, buffer, CORSAIR_V2_WRITE_SIZE);
+    hid_write(dev, buffer, write_size);
 
     if(!skip_reads)
     {
@@ -425,7 +443,7 @@ void CorsairPeripheralV2Controller::SetLEDs(uint8_t *data, uint16_t data_size)
 
     remaining              -= copy_bytes;
     buffer[2]               = CORSAIR_V2_CMD_BLK_WN;
-    copy_bytes              = CORSAIR_V2_WRITE_SIZE - offset2;
+    copy_bytes              = write_size - offset2;
 
     /*---------------------------------------------------------*\
     | Send the remaining packets                                |
@@ -441,7 +459,7 @@ void CorsairPeripheralV2Controller::SetLEDs(uint8_t *data, uint16_t data_size)
 
         memcpy(&buffer[offset2], &data[index], copy_bytes);
 
-        hid_write(dev, buffer, CORSAIR_V2_WRITE_SIZE);
+        hid_write(dev, buffer, write_size);
 
         /*-----------------------------------------------------*\
         | Pace the transfer: the device does not acknowledge    |

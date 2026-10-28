@@ -28,6 +28,7 @@
 #define CORSAIR_V2_WRITE_WIRELESS_ID    9
 #define CORSAIR_V2_WRITE_SIZE           65
 #define CORSAIR_V2_PACKET_SIZE          1024
+#define CORSAIR_V2_MAX_WRITE_SIZE       1025        /* 1024 byte report + report ID     */
 
 #define CORSAIR_V2_LIGHT_CTRL1          1
 #define CORSAIR_V2_LIGHT_CTRL2          34          /* 0x22                             */
@@ -124,6 +125,7 @@ private:
     hid_device*                     dev;
 
     uint8_t                         write_cmd           = CORSAIR_V2_WRITE_WIRED_ID;
+    uint16_t                        write_size          = CORSAIR_V2_WRITE_SIZE;
     bool                            skip_reads          = false;
     std::string                     firmware_version;
     std::string                     location;
