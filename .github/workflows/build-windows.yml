@@ -1,0 +1,45 @@
+﻿name: Build OpenRGB (Windows 64-bit)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.8.3 (MSVC 2022 64-bit)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qt5compat'
+          cache: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install jom
+        run: choco install jom -y --no-progress
+
+      - name: Build
+        shell: cmd
+        run: |
+          qmake OpenRGB.pro CONFIG-=debug_and_release CONFIG+=release || exit /b 1
+          jom || exit /b 1
+          windeployqt --no-patchqt --no-quick-import --no-translations --no-system-d3d-compiler --no-compiler-runtime --no-opengl-sw --no-network .\release\ || exit /b 1
+          copy "%QT_ROOT_DIR%\bin\Qt6Core5Compat.dll" .\release\
+          copy "%QT_ROOT_DIR%\bin\Qt6OpenGL.dll" .\release\
+          move release "OpenRGB Windows 64-bit"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRGB-Windows-64-patched
+          path: OpenRGB Windows 64-bit
