@@ -99,6 +99,17 @@ void CorsairCommanderCoreController::InitController()
     }
 
     SetFanMode(false);
+
+    /*-----------------------------------------------------*\
+    | Remember how many LEDs the controller has configured  |
+    | on each port. Direct color data is laid out back to   |
+    | back using these counts, so SetDirectColor must match |
+    | them (e.g. 8-LED fans left configured by iCUE).       |
+    \*-----------------------------------------------------*/
+    if(pid != CORSAIR_COMMANDER_CORE_XT_PID)
+    {
+        port_led_counts = GetLedCounts();
+    }
 }
 
 std::string CorsairCommanderCoreController::GetFirmwareString()
@@ -156,6 +167,8 @@ void CorsairCommanderCoreController::KeepaliveThread()
 
 void CorsairCommanderCoreController::SendCommit()
 {
+    std::lock_guard<std::recursive_mutex> color_lock(color_mutex);
+
     if(!lastcolors.empty())
     {
         /*-----------------------------------------------------*\
@@ -334,12 +347,20 @@ void CorsairCommanderCoreController::SetDirectColor
         std::vector<zone> zones
     )
 {
+    /*-----------------------------------------------------*\
+    | The keepalive thread also calls this function, so     |
+    | serialize access to lastcolors/lastzones. Without     |
+    | this the two threads race on the vectors and corrupt  |
+    | the heap (crash 0xc0000374 while changing zones).     |
+    \*-----------------------------------------------------*/
+    std::lock_guard<std::recursive_mutex> color_lock(color_mutex);
+
     if(controller_ready == 1 && ((std::chrono::steady_clock::now() - last_commit_time) > std::chrono::milliseconds(33)))
     {
         lastcolors              = colors;
         lastzones               = zones;
         int packet_offset       = 0;
-        int led_idx             = 0;
+        unsigned int led_idx    = 0;
         int packet_len          = CORSAIR_COMMANDER_CORE_RGB_DATA_LENGTH;
 
         if(pid == CORSAIR_COMMANDER_CORE_XT_PID)
@@ -347,27 +368,54 @@ void CorsairCommanderCoreController::SetDirectColor
             packet_len          = CORSAIR_COMMANDER_CORE_XT_RGB_DATA_LENGTH;
         }
 
+        /*-------------------------------------------------*\
+        | Zero the buffer so unused LEDs are off instead of |
+        | showing whatever was left in memory               |
+        \*-------------------------------------------------*/
         unsigned char* usb_buf  = new unsigned char[packet_len];
+        memset(usb_buf, 0x00, packet_len);
 
         for(unsigned int zone_idx = 0; zone_idx < zones.size(); zone_idx++)
         {
-            /*-------------------------------------------------*\
-            | Add led colors                                    |
-            \*-------------------------------------------------*/
-            for(unsigned int i = led_idx; i < led_idx + zones[zone_idx].leds_count; i++)
-            {
-                usb_buf[packet_offset]   = RGBGetRValue(colors[i]);
-                usb_buf[packet_offset+1] = RGBGetGValue(colors[i]);
-                usb_buf[packet_offset+2] = RGBGetBValue(colors[i]);
-                packet_offset += 3;
-            }
+            unsigned int zone_leds  = zones[zone_idx].leds_count;
 
-            led_idx = led_idx + zones[zone_idx].leds_count;
+            /*-------------------------------------------------*\
+            | Space each fan port by the LED count the          |
+            | controller reports for it. Fall back to 34 (QL    |
+            | fan mode) when the layout is unknown.             |
+            \*-------------------------------------------------*/
+            unsigned int stride     = zone_leds;
 
             if(zone_idx != 0)
             {
-                packet_offset += 3 * (34 - zones[zone_idx].leds_count);
+                stride = 34;
+
+                if(zone_idx < port_led_counts.size() && port_led_counts[zone_idx] <= 34)
+                {
+                    stride = port_led_counts[zone_idx];
+                }
             }
+
+            /*-------------------------------------------------*\
+            | Add led colors                                    |
+            \*-------------------------------------------------*/
+            for(unsigned int i = 0; i < stride; i++)
+            {
+                if(packet_offset + 3 > packet_len)
+                {
+                    break;
+                }
+
+                if(i < zone_leds && (led_idx + i) < colors.size())
+                {
+                    usb_buf[packet_offset]   = RGBGetRValue(colors[led_idx + i]);
+                    usb_buf[packet_offset+1] = RGBGetGValue(colors[led_idx + i]);
+                    usb_buf[packet_offset+2] = RGBGetBValue(colors[led_idx + i]);
+                }
+                packet_offset += 3;
+            }
+
+            led_idx = led_idx + zone_leds;
         }
 
         /*-----------------------------------------------------*\

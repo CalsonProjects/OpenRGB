@@ -13,6 +13,7 @@
 #pragma once
 
 #include <chrono>
+#include <mutex>
 #include <vector>
 #include <hidapi.h>
 #include "RGBController.h"
@@ -75,6 +76,8 @@ private:
     std::string                                         location;
     std::vector<RGBColor>                               lastcolors;
     std::vector<zone>                                   lastzones;
+    std::recursive_mutex                                color_mutex;
+    std::vector<unsigned short int>                     port_led_counts;
     std::string                                         name;
     unsigned short int                                  version[3] = {0, 0, 0};
     int                                                 packet_size;
